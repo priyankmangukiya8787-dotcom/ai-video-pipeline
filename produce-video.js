@@ -88,16 +88,28 @@ async function getWordTimestamps(audioPath, index) {
 // ─── Image via Krea AI API (Z-Image) ──────────────────────────────────────────
 
 async function generateImage(prompt, index) {
-  const imagePath = path.join('my-video', 'public', 'assets', 'images', `scene-${index}-image.jpg`);
+  const imageDir = path.join(__dirname, 'my-video', 'public', 'assets', 'images');
+  await fs.ensureDir(imageDir);
+  const imagePath = path.join(imageDir, `scene-${index}-image.jpg`);
 
   if (await fs.pathExists(imagePath)) {
     console.log(`⏩ Image already exists for scene ${index}, skipping.`);
     return imagePath;
   }
 
+  // Keep the pipeline renderable even when the optional image provider is not configured.
+  const fallbackPath = path.join(imageDir, `scene-${index}-image.svg`);
+  const writeFallback = async (reason) => {
+    const safePrompt = String(prompt || 'AI video scene').replace(/[&<>"]/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#111827"/><stop offset="100%" stop-color="#312e81"/></linearGradient></defs><rect width="1280" height="720" fill="url(#bg)"/><text x="640" y="300" text-anchor="middle" fill="#fbbf24" font-family="Arial,sans-serif" font-size="42" font-weight="bold">SCENE ${index}</text><foreignObject x="100" y="350" width="1080" height="180"><div xmlns="http://www.w3.org/1999/xhtml" style="color:#fff;font-family:Arial,sans-serif;font-size:24px;text-align:center">${safePrompt.slice(0,220)}</div></foreignObject></svg>`;
+    await fs.writeFile(fallbackPath, svg, 'utf8');
+    console.warn(`⚠️ Using placeholder art for scene ${index} (${reason}). Add KREA_API_KEY to generate real images.`);
+    return fallbackPath;
+  };
+
   const kreaKey = process.env.KREA_API_KEY;
   if (!kreaKey) {
-    throw new Error('❌ KREA_API_KEY is not set in .env. Required for Z-Image generation.');
+    return writeFallback('KREA_API_KEY is missing');
   }
 
   const kreaModel = process.env.KREA_MODEL || 'z-image';
@@ -170,7 +182,7 @@ async function generateImage(prompt, index) {
       
       if (attempt === maxAttempts) {
         console.error(`❌ All ${maxAttempts} Krea AI attempts failed.`);
-        throw lastError;
+        return writeFallback(errMsg);
       }
     }
   }
@@ -772,7 +784,7 @@ async function main() {
       console.log(`   ⏳ Waiting 10s before next image generation...`);
       await new Promise(r => setTimeout(r, imageDelay));
     }
-    await generateImage(scene.videoPrompt, sceneNum);
+    const generatedImagePath = await generateImage(scene.videoPrompt, sceneNum);
 
     storyboardData.scenes.push({
       id: `scene${sceneNum}`,
@@ -780,7 +792,7 @@ async function main() {
       durationInSeconds: sceneDurationInSeconds,
       narration: scene.voiceover,
       wordTimestamps: wordTimestamps,
-      imageFile: `scene-${sceneNum}-image.jpg`,
+      imageFile: path.basename(generatedImagePath),
       audioFile: `scene-${sceneNum}-audio.mp3`,
       transition: scene.transition
     });
